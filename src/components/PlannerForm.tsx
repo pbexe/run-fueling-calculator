@@ -9,8 +9,8 @@ import {
   paceToMinutesPerKm,
   runDurationMinutes,
 } from "../planner/plan";
-import { FUEL_SOURCES, GELS, planGels } from "../planner/fuel";
-import type { FuelSourceId } from "../planner/fuel";
+import { FUEL_SOURCES } from "../planner/fuel";
+import { planFueling } from "../planner/fueling";
 import {
   CONDITIONS,
   DEFAULT_CONDITIONS_ID,
@@ -21,13 +21,15 @@ import {
 import type { ConditionsId, SweatRatePresetId } from "../planner/hydration";
 
 const CUSTOM_DISTANCE_ID = "custom";
+const HOMEMADE_DRINK_LABEL = "Homemade Sports Drink";
 
 export default function PlannerForm() {
   const [distanceId, setDistanceId] = useState<string>(DISTANCE_PRESETS[0].id);
   const [customKm, setCustomKm] = useState<string>("");
   const [paceMinutes, setPaceMinutes] = useState<string>("6");
   const [paceSeconds, setPaceSeconds] = useState<string>("0");
-  const [fuelSourceId, setFuelSourceId] = useState<FuelSourceId>(GELS.id);
+  const [gelsSelected, setGelsSelected] = useState<boolean>(true);
+  const [drinkSelected, setDrinkSelected] = useState<boolean>(false);
   const [sweatRatePresetId, setSweatRatePresetId] =
     useState<SweatRatePresetId>(DEFAULT_SWEAT_RATE_PRESET_ID);
   const [sweatRateOverride, setSweatRateOverride] = useState<string>("");
@@ -69,16 +71,6 @@ export default function PlannerForm() {
     [durationMinutes],
   );
 
-  const gelPlan = useMemo(() => {
-    if (durationMinutes === null || carbTarget === null) {
-      return null;
-    }
-    if (fuelSourceId !== GELS.id) {
-      return null;
-    }
-    return planGels(carbTarget, durationMinutes);
-  }, [carbTarget, durationMinutes, fuelSourceId]);
-
   const overrideMlPerHour = useMemo(() => {
     const parsed = Number.parseFloat(sweatRateOverride);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -94,6 +86,21 @@ export default function PlannerForm() {
       durationMinutes,
     );
   }, [durationMinutes, sweatRatePresetId, overrideMlPerHour, conditionsId]);
+
+  const fuelingPlan = useMemo(() => {
+    if (durationMinutes === null || carbTarget === null) {
+      return null;
+    }
+    return planFueling(
+      carbTarget,
+      durationMinutes,
+      { gels: gelsSelected, drink: drinkSelected },
+      {
+        totalFluidMl: hydrationPlan?.totalFluidMl ?? 0,
+        timeline: hydrationPlan?.timeline ?? [],
+      },
+    );
+  }, [carbTarget, durationMinutes, gelsSelected, drinkSelected, hydrationPlan]);
 
   return (
     <div className="grid w-full gap-6 md:grid-cols-2">
@@ -184,24 +191,35 @@ export default function PlannerForm() {
           </div>
 
           <div className="form-control">
-            <span className="label-text mb-2 font-medium">Fuel Source</span>
+            <span className="label-text mb-2 font-medium">Fuel Sources</span>
             <div className="flex flex-wrap gap-2">
               {FUEL_SOURCES.map((source) => (
                 <button
                   key={source.id}
                   type="button"
                   className={`btn btn-sm ${
-                    fuelSourceId === source.id ? "btn-primary" : "btn-outline"
+                    gelsSelected ? "btn-primary" : "btn-outline"
                   }`}
-                  aria-pressed={fuelSourceId === source.id}
-                  onClick={() => setFuelSourceId(source.id)}
+                  aria-pressed={gelsSelected}
+                  onClick={() => setGelsSelected((on) => !on)}
                 >
                   {source.label}
                 </button>
               ))}
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  drinkSelected ? "btn-primary" : "btn-outline"
+                }`}
+                aria-pressed={drinkSelected}
+                onClick={() => setDrinkSelected((on) => !on)}
+              >
+                {HOMEMADE_DRINK_LABEL}
+              </button>
             </div>
             <span className="label-text-alt mt-2 text-base-content/60">
-              More Fuel Sources coming soon.
+              Combine several. The Homemade Sports Drink covers the whole Fluid
+              Target and its carbs count first; gels fill the rest.
             </span>
           </div>
 
@@ -323,41 +341,95 @@ export default function PlannerForm() {
                 )}
               </div>
 
-              {carbTarget.fuelNeeded && gelPlan !== null && (
-                <div className="flex flex-col gap-4">
-                  <div className="rounded-box bg-base-200 p-4">
-                    <div className="text-sm font-semibold uppercase tracking-wide text-base-content/70">
-                      Shopping summary
-                    </div>
-                    <div className="mt-1 text-2xl font-bold text-primary">
-                      {gelPlan.gelCount}{" "}
-                      {gelPlan.gelCount === 1 ? "gel" : "gels"}
-                    </div>
-                    <div className="text-sm text-base-content/70">
-                      About {gelPlan.carbsPerGelGrams} g carbs each,{" "}
-                      {gelPlan.totalCarbsGrams} g total across the Run.
-                    </div>
-                  </div>
+              {fuelingPlan !== null &&
+                (carbTarget.fuelNeeded || fuelingPlan.drinkSelected) &&
+                (fuelingPlan.gelCount > 0 || fuelingPlan.drinkSelected) && (
+                  <div className="flex flex-col gap-4">
+                    <div className="rounded-box bg-base-200 p-4">
+                      <div className="text-sm font-semibold uppercase tracking-wide text-base-content/70">
+                        Shopping summary
+                      </div>
 
-                  <div>
-                    <div className="mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70">
-                      Timeline
-                    </div>
-                    <ul className="menu bg-base-200 rounded-box w-full gap-1 p-2">
-                      {gelPlan.timeline.map((serving) => (
-                        <li key={serving.index}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono font-semibold">
-                              {serving.offsetLabel}
-                            </span>
-                            <span className="text-base-content/80">Gel</span>
+                      {fuelingPlan.gelCount > 0 && (
+                        <>
+                          <div className="mt-1 text-2xl font-bold text-primary">
+                            {fuelingPlan.gelCount}{" "}
+                            {fuelingPlan.gelCount === 1 ? "gel" : "gels"}
                           </div>
-                        </li>
-                      ))}
-                    </ul>
+                          <div className="text-sm text-base-content/70">
+                            About {fuelingPlan.carbsPerGelGrams} g carbs each,{" "}
+                            {fuelingPlan.gelCarbsGrams} g from gels.
+                          </div>
+                        </>
+                      )}
+
+                      {fuelingPlan.recipe !== null && (
+                        <div className={fuelingPlan.gelCount > 0 ? "mt-3" : ""}>
+                          <div className="text-lg font-bold text-primary">
+                            {HOMEMADE_DRINK_LABEL}
+                          </div>
+                          <div className="text-sm text-base-content/70">
+                            Makes {fuelingPlan.recipe.totalVolumeMl} ml at ~6%
+                            carbs ({fuelingPlan.recipe.carbsGrams} g carbs,{" "}
+                            {fuelingPlan.recipe.sodiumMg} mg sodium).
+                          </div>
+                          <ul className="mt-2 flex flex-col gap-1 text-sm">
+                            <li className="flex items-center justify-between">
+                              <span>Table sugar</span>
+                              <span className="text-base-content/80">
+                                {fuelingPlan.recipe.sugar.grams} g (
+                                {fuelingPlan.recipe.sugar.spoon.label})
+                              </span>
+                            </li>
+                            <li className="flex items-center justify-between">
+                              <span>Sea salt</span>
+                              <span className="text-base-content/80">
+                                {fuelingPlan.recipe.salt.grams} g (
+                                {fuelingPlan.recipe.salt.spoon.label})
+                              </span>
+                            </li>
+                          </ul>
+                          <div className="mt-2 text-sm text-base-content/60">
+                            {fuelingPlan.recipe.flavouringNote}
+                          </div>
+                        </div>
+                      )}
+
+                      {carbTarget.fuelNeeded && (
+                        <div className="mt-3 text-sm text-base-content/70">
+                          {fuelingPlan.totalCarbsGrams} g carbs total against a{" "}
+                          {Math.round(fuelingPlan.carbTargetTotalGrams)} g Carb
+                          Target.
+                          {fuelingPlan.drinkMeetsCarbTarget
+                            ? " The drink alone meets the Carb Target, so no gels are needed."
+                            : ""}
+                        </div>
+                      )}
+                    </div>
+
+                    {fuelingPlan.timeline.length > 0 && (
+                      <div>
+                        <div className="mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70">
+                          Timeline
+                        </div>
+                        <ul className="menu bg-base-200 rounded-box w-full gap-1 p-2">
+                          {fuelingPlan.timeline.map((entry) => (
+                            <li key={entry.index}>
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono font-semibold">
+                                  {entry.offsetLabel}
+                                </span>
+                                <span className="text-base-content/80">
+                                  {entry.label}
+                                </span>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
+                )}
 
               {hydrationPlan !== null && (
                 <div className="stat px-0">
@@ -366,7 +438,9 @@ export default function PlannerForm() {
                     {hydrationPlan.fluidTargetMlPerHour} ml/h
                   </div>
                   <div className="stat-desc">
-                    water to drink per hour on the Run
+                    {drinkSelected
+                      ? "Homemade Sports Drink to drink per hour on the Run"
+                      : "water to drink per hour on the Run"}
                     {hydrationPlan.usedOverride
                       ? "; from your measured Sweat Rate, so Conditions are ignored"
                       : ""}
@@ -381,15 +455,19 @@ export default function PlannerForm() {
                       Fluid summary
                     </div>
                     <div className="mt-1 text-2xl font-bold text-primary">
-                      {hydrationPlan.totalFluidMl} ml water
+                      {hydrationPlan.totalFluidMl} ml{" "}
+                      {drinkSelected ? "Homemade Sports Drink" : "water"}
                     </div>
                     <div className="text-sm text-base-content/70">
                       Total to carry across the Run at{" "}
                       {hydrationPlan.fluidTargetMlPerHour} ml/h.
+                      {drinkSelected
+                        ? " Mixed to the recipe above; the sips are in the Timeline."
+                        : ""}
                     </div>
                   </div>
 
-                  {hydrationPlan.timeline.length > 0 && (
+                  {!drinkSelected && hydrationPlan.timeline.length > 0 && (
                     <div>
                       <div className="mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70">
                         Drink reminders

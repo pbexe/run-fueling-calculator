@@ -13,8 +13,9 @@ export default function Home() {
               Running Fueling Calculator
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-base-content/75">
-              Enter your Run distance and pace, pick gels as your Fuel Source,
-              and get a Fueling Plan: when to take each gel and how many to buy.
+              Enter your Run distance and pace, pick your Fuel Sources (gels, a
+              Homemade Sports Drink, or both), and get a Fueling Plan: when to
+              take each one, how many to buy, and the drink recipe to mix.
             </p>
           </div>
 

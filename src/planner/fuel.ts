@@ -63,16 +63,16 @@ export interface GelPlan {
   readonly timeline: readonly FuelServing[];
 }
 
-// Allocate whole gels to hit the Carb Target across the Run Duration.
+// The total carbohydrate, in grams, the plan aims to deliver across the whole
+// Run: the middle of the Carb Target band held over the Run Duration. A Run
+// with no Carb Target (fuelNeeded false) needs no carbs, so this is zero.
 //
-// The Carb Target is a grams-per-hour band, so we aim for the middle of the
-// band over the whole Run and round to the nearest whole gel: quantities are
-// whole servings only. A Run that needs fuel always gets at least one gel. A
-// Run with no Carb Target (fuelNeeded false) gets none.
-export function gelCountForRun(
+// This is the quantity the planner allocates Fuel Sources against. Under the
+// drink-first rule (ADR-0002) the Homemade Sports Drink is subtracted from it
+// first and solids fill only the remainder.
+export function targetCarbsGrams(
   carbTarget: CarbTarget,
   durationMinutes: number,
-  carbsPerGelGrams: number = GEL_CARBS_GRAMS,
 ): number {
   if (
     !carbTarget.fuelNeeded ||
@@ -85,7 +85,24 @@ export function gelCountForRun(
   const targetGramsPerHour =
     (carbTarget.gramsPerHourLow + carbTarget.gramsPerHourHigh) / 2;
   const hours = durationMinutes / 60;
-  const totalTargetCarbs = targetGramsPerHour * hours;
+  return targetGramsPerHour * hours;
+}
+
+// Allocate whole gels to hit the Carb Target across the Run Duration.
+//
+// The Carb Target is a grams-per-hour band, so we aim for the middle of the
+// band over the whole Run and round to the nearest whole gel: quantities are
+// whole servings only. A Run that needs fuel always gets at least one gel. A
+// Run with no Carb Target (fuelNeeded false) gets none.
+export function gelCountForRun(
+  carbTarget: CarbTarget,
+  durationMinutes: number,
+  carbsPerGelGrams: number = GEL_CARBS_GRAMS,
+): number {
+  const totalTargetCarbs = targetCarbsGrams(carbTarget, durationMinutes);
+  if (totalTargetCarbs <= 0) {
+    return 0;
+  }
 
   const count = Math.round(totalTargetCarbs / carbsPerGelGrams);
   return Math.max(1, count);
