@@ -13,8 +13,8 @@ export default function Home() {
               Running Fueling Calculator
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-base-content/75">
-              Enter your Run distance and pace to see the derived Run Duration
-              and the Carb Target for your Fueling Plan.
+              Enter your Run distance and pace, pick gels as your Fuel Source,
+              and get a Fueling Plan: when to take each gel and how many to buy.
             </p>
           </div>
 

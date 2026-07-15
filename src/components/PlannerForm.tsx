@@ -9,6 +9,8 @@ import {
   paceToMinutesPerKm,
   runDurationMinutes,
 } from "../planner/plan";
+import { FUEL_SOURCES, GELS, planGels } from "../planner/fuel";
+import type { FuelSourceId } from "../planner/fuel";
 
 const CUSTOM_DISTANCE_ID = "custom";
 
@@ -17,6 +19,7 @@ export default function PlannerForm() {
   const [customKm, setCustomKm] = useState<string>("");
   const [paceMinutes, setPaceMinutes] = useState<string>("6");
   const [paceSeconds, setPaceSeconds] = useState<string>("0");
+  const [fuelSourceId, setFuelSourceId] = useState<FuelSourceId>(GELS.id);
 
   const distanceKm = useMemo(() => {
     if (distanceId === CUSTOM_DISTANCE_ID) {
@@ -51,6 +54,16 @@ export default function PlannerForm() {
         : carbTargetForRunDuration(durationMinutes),
     [durationMinutes],
   );
+
+  const gelPlan = useMemo(() => {
+    if (durationMinutes === null || carbTarget === null) {
+      return null;
+    }
+    if (fuelSourceId !== GELS.id) {
+      return null;
+    }
+    return planGels(carbTarget, durationMinutes);
+  }, [carbTarget, durationMinutes, fuelSourceId]);
 
   return (
     <div className="grid w-full gap-6 md:grid-cols-2">
@@ -139,6 +152,28 @@ export default function PlannerForm() {
               <span className="text-base-content/70">min/km</span>
             </div>
           </div>
+
+          <div className="form-control">
+            <span className="label-text mb-2 font-medium">Fuel Source</span>
+            <div className="flex flex-wrap gap-2">
+              {FUEL_SOURCES.map((source) => (
+                <button
+                  key={source.id}
+                  type="button"
+                  className={`btn btn-sm ${
+                    fuelSourceId === source.id ? "btn-primary" : "btn-outline"
+                  }`}
+                  aria-pressed={fuelSourceId === source.id}
+                  onClick={() => setFuelSourceId(source.id)}
+                >
+                  {source.label}
+                </button>
+              ))}
+            </div>
+            <span className="label-text-alt mt-2 text-base-content/60">
+              More Fuel Sources coming soon.
+            </span>
+          </div>
         </div>
       </section>
 
@@ -182,6 +217,42 @@ export default function PlannerForm() {
                   </>
                 )}
               </div>
+
+              {carbTarget.fuelNeeded && gelPlan !== null && (
+                <div className="flex flex-col gap-4">
+                  <div className="rounded-box bg-base-200 p-4">
+                    <div className="text-sm font-semibold uppercase tracking-wide text-base-content/70">
+                      Shopping summary
+                    </div>
+                    <div className="mt-1 text-2xl font-bold text-primary">
+                      {gelPlan.gelCount}{" "}
+                      {gelPlan.gelCount === 1 ? "gel" : "gels"}
+                    </div>
+                    <div className="text-sm text-base-content/70">
+                      About {gelPlan.carbsPerGelGrams} g carbs each,{" "}
+                      {gelPlan.totalCarbsGrams} g total across the Run.
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70">
+                      Timeline
+                    </div>
+                    <ul className="menu bg-base-200 rounded-box w-full gap-1 p-2">
+                      {gelPlan.timeline.map((serving) => (
+                        <li key={serving.index}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-semibold">
+                              {serving.offsetLabel}
+                            </span>
+                            <span className="text-base-content/80">Gel</span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
             </>
           )}
 
