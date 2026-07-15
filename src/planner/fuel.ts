@@ -1,32 +1,44 @@
 // Pure, framework-free Fuel Source planning for a Run.
 //
-// This module turns a Carb Target and a Run Duration into a Fueling Plan for a
-// single Fuel Source: gels. It has no React or Next.js dependencies so the
-// allocation and spacing rules can be unit tested in isolation. Terms follow
-// CONTEXT.md: a Fuel Source is something the runner ingests for carbohydrate,
-// each with known carbs per serving; the Fueling Plan is the timeline of when
-// to take each serving plus a shopping-list summary of totals.
+// This module turns a Carb Target and a Run Duration into whole-serving
+// allocations across one or more solid Fuel Sources: gels, bananas and chews.
+// It has no React or Next.js dependencies so the allocation rules can be unit
+// tested in isolation. A Fuel Source is something the runner ingests for
+// carbohydrate, each with known carbs per serving; the Fueling Plan (built in
+// fueling.ts) is the timeline of when to take each serving plus a
+// shopping-list summary of totals.
 
 import type { CarbTarget } from "./plan";
 
-// A Fuel Source the runner can select. Gels are the only source for now; more
-// sources (bananas, chews, the Homemade Sports Drink) come in later slices.
+// A Fuel Source the runner can select. Quantities are always whole servings,
+// so carbsPerServingGrams is the smallest carb increment the planner can
+// allocate for this source.
 export interface FuelSource {
   readonly id: FuelSourceId;
   readonly label: string;
-  // Carbohydrate delivered by one whole serving, in grams. Quantities are
-  // always whole servings, so this is the smallest carb increment the planner
-  // can allocate for this source.
+  // Carbohydrate delivered by one whole serving, in grams.
   readonly carbsPerServingGrams: number;
-  // The singular noun for one serving, used in timeline and summary copy.
+  // The singular noun for one serving, used in timeline copy and when exactly
+  // one serving is allocated, e.g. "gel", "banana", "handful of chews".
   readonly servingNoun: string;
+  // The plural noun for zero or more than one serving, e.g. "gels", "bananas",
+  // "handfuls of chews".
+  readonly servingNounPlural: string;
+  // For sources dosed as a bundle of smaller pieces (chews), how many pieces
+  // make up one serving and the singular noun for one piece. Absent for
+  // sources that are already a single unit (gels, bananas).
+  readonly piecesPerServing?: number;
+  readonly pieceNoun?: string;
+  // The serving count at or above which this source becomes impractical to
+  // carry (e.g. 4+ bananas). Absent means no practicality warning applies.
+  readonly impracticalServingThreshold?: number;
 }
 
-export type FuelSourceId = "gels";
+export type FuelSourceId = "gels" | "bananas" | "chews";
 
 // Gels are modelled generically at ~22 to 25 g carbs per sachet. We use a
-// single representative value so the planner can allocate whole gels; the exact
-// figure varies by brand and is not something the runner tunes here.
+// single representative value so the planner can allocate whole gels; the
+// exact figure varies by brand and is not something the runner tunes here.
 export const GEL_CARBS_GRAMS = 23;
 
 export const GELS: FuelSource = {
@@ -34,34 +46,45 @@ export const GELS: FuelSource = {
   label: "Gels",
   carbsPerServingGrams: GEL_CARBS_GRAMS,
   servingNoun: "gel",
+  servingNounPlural: "gels",
 };
 
-// Every Fuel Source the selection UI offers. Gels only for now.
-export const FUEL_SOURCES: readonly FuelSource[] = [GELS];
+// A banana carries roughly 25 to 27 g carbs; we use a representative
+// mid-point so the planner can allocate whole bananas.
+export const BANANA_CARBS_GRAMS = 26;
 
-// One entry on the Fueling Plan timeline: a single serving at a time offset
-// from the start of the Run.
-export interface FuelServing {
-  // 1-based position of this serving on the timeline.
-  readonly index: number;
-  // Minutes from the start of the Run at which to take this serving.
-  readonly offsetMinutes: number;
-  // The offset formatted as "H:MM" for display, e.g. "0:30".
-  readonly offsetLabel: string;
-}
+// Carrying this many bananas or more is impractical, so the plan warns and
+// suggests rebalancing onto a drink or gels.
+export const BANANA_IMPRACTICAL_THRESHOLD = 4;
 
-// A complete gels-only Fueling Plan: the timeline of servings plus the totals
-// the shopping-list summary needs.
-export interface GelPlan {
-  // Whole gels to buy and carry.
-  readonly gelCount: number;
-  // Carbs delivered by one gel, in grams.
-  readonly carbsPerGelGrams: number;
-  // Total carbs the allocated gels deliver across the Run, in grams.
-  readonly totalCarbsGrams: number;
-  // When to take each gel, evenly spaced across the Run Duration.
-  readonly timeline: readonly FuelServing[];
-}
+export const BANANAS: FuelSource = {
+  id: "bananas",
+  label: "Bananas",
+  carbsPerServingGrams: BANANA_CARBS_GRAMS,
+  servingNoun: "banana",
+  servingNounPlural: "bananas",
+  impracticalServingThreshold: BANANA_IMPRACTICAL_THRESHOLD,
+};
+
+// Chews carry roughly 5 g carbs per piece and are dosed in handfuls rather
+// than one at a time, so a "serving" for chews is one handful.
+export const CHEW_CARBS_PER_PIECE_GRAMS = 5;
+export const CHEW_PIECES_PER_HANDFUL = 4;
+export const CHEW_CARBS_GRAMS =
+  CHEW_CARBS_PER_PIECE_GRAMS * CHEW_PIECES_PER_HANDFUL;
+
+export const CHEWS: FuelSource = {
+  id: "chews",
+  label: "Chews",
+  carbsPerServingGrams: CHEW_CARBS_GRAMS,
+  servingNoun: "handful of chews",
+  servingNounPlural: "handfuls of chews",
+  piecesPerServing: CHEW_PIECES_PER_HANDFUL,
+  pieceNoun: "chew",
+};
+
+// Every Fuel Source the selection UI offers.
+export const FUEL_SOURCES: readonly FuelSource[] = [GELS, BANANAS, CHEWS];
 
 // The total carbohydrate, in grams, the plan aims to deliver across the whole
 // Run: the middle of the Carb Target band held over the Run Duration. A Run
@@ -88,30 +111,90 @@ export function targetCarbsGrams(
   return targetGramsPerHour * hours;
 }
 
-// Allocate whole gels to hit the Carb Target across the Run Duration.
-//
-// The Carb Target is a grams-per-hour band, so we aim for the middle of the
-// band over the whole Run and round to the nearest whole gel: quantities are
-// whole servings only. A Run that needs fuel always gets at least one gel. A
-// Run with no Carb Target (fuelNeeded false) gets none.
-export function gelCountForRun(
+// The low and high bounds of the Carb Target band held over the whole Run, in
+// grams. Null when the Run needs no fuel. Used to warn when a plan's rounded
+// totals land outside the band.
+export function carbTargetBandGrams(
   carbTarget: CarbTarget,
   durationMinutes: number,
-  carbsPerGelGrams: number = GEL_CARBS_GRAMS,
-): number {
-  const totalTargetCarbs = targetCarbsGrams(carbTarget, durationMinutes);
-  if (totalTargetCarbs <= 0) {
-    return 0;
+): { lowGrams: number; highGrams: number } | null {
+  if (
+    !carbTarget.fuelNeeded ||
+    carbTarget.gramsPerHourLow === null ||
+    carbTarget.gramsPerHourHigh === null
+  ) {
+    return null;
   }
 
-  const count = Math.round(totalTargetCarbs / carbsPerGelGrams);
-  return Math.max(1, count);
+  const hours = durationMinutes / 60;
+  return {
+    lowGrams: carbTarget.gramsPerHourLow * hours,
+    highGrams: carbTarget.gramsPerHourHigh * hours,
+  };
+}
+
+// One Fuel Source's share of an allocation: how many whole servings and the
+// carbs that delivers.
+export interface SolidAllocation {
+  readonly source: FuelSource;
+  readonly count: number;
+  readonly totalCarbsGrams: number;
+}
+
+// Allocate a total carb amount across one or more solid Fuel Sources in whole
+// servings.
+//
+// The amount is split evenly across the given sources, then each source's
+// share is independently rounded to the nearest whole serving of that source
+// - so a mix of gels, bananas and chews each gets a sensible portion rather
+// than one source soaking up the whole target. When requireAtLeastOne is set
+// (a fuelled Run with no drink to cover the gap) and every source would
+// otherwise round to zero, the first source is bumped to one serving so the
+// Run is never left with no fuel at all.
+export function allocateSolidsForRun(
+  totalCarbsGrams: number,
+  sources: readonly FuelSource[],
+  requireAtLeastOne: boolean,
+): SolidAllocation[] {
+  if (sources.length === 0) {
+    return [];
+  }
+
+  const shareGrams = Math.max(0, totalCarbsGrams) / sources.length;
+  const allocations = sources.map((source) => {
+    const count = Math.max(
+      0,
+      Math.round(shareGrams / source.carbsPerServingGrams),
+    );
+    return {
+      source,
+      count,
+      totalCarbsGrams: count * source.carbsPerServingGrams,
+    };
+  });
+
+  if (
+    requireAtLeastOne &&
+    allocations.every((allocation) => allocation.count === 0)
+  ) {
+    const [first, ...rest] = allocations;
+    return [
+      {
+        ...first,
+        count: 1,
+        totalCarbsGrams: first.source.carbsPerServingGrams,
+      },
+      ...rest,
+    ];
+  }
+
+  return allocations;
 }
 
 // Space a number of servings evenly across the Run Duration.
 //
 // N servings split the Run into N + 1 equal gaps, so the runner has an equal
-// stretch before the first gel, between each pair, and after the last gel
+// stretch before the first serving, between each pair, and after the last one
 // before the finish. For 3 gels across a 2 hour Run each gap is 30 min, giving
 // offsets of 0:30, 1:00 and 1:30.
 export function spaceServingsEvenly(
@@ -131,34 +214,4 @@ export function formatTimeOffset(offsetMinutes: number): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return `${hours}:${minutes.toString().padStart(2, "0")}`;
-}
-
-// Build the gels-only Fueling Plan for a Run: allocate whole gels to the Carb
-// Target, then space them evenly across the Run Duration.
-export function planGels(
-  carbTarget: CarbTarget,
-  durationMinutes: number,
-  carbsPerGelGrams: number = GEL_CARBS_GRAMS,
-): GelPlan {
-  const gelCount = gelCountForRun(
-    carbTarget,
-    durationMinutes,
-    carbsPerGelGrams,
-  );
-
-  const timeline: FuelServing[] = spaceServingsEvenly(
-    gelCount,
-    durationMinutes,
-  ).map((offsetMinutes, index) => ({
-    index: index + 1,
-    offsetMinutes,
-    offsetLabel: formatTimeOffset(offsetMinutes),
-  }));
-
-  return {
-    gelCount,
-    carbsPerGelGrams,
-    totalCarbsGrams: gelCount * carbsPerGelGrams,
-    timeline,
-  };
 }
