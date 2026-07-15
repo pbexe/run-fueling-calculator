@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import {
   carbTargetForRunDuration,
@@ -14,25 +15,56 @@ import type { FuelSourceId } from "../planner/fuel";
 import { planFueling } from "../planner/fueling";
 import {
   CONDITIONS,
-  DEFAULT_CONDITIONS_ID,
-  DEFAULT_SWEAT_RATE_PRESET_ID,
   planHydration,
   SWEAT_RATE_PRESETS,
 } from "../planner/hydration";
-import type { ConditionsId, SweatRatePresetId } from "../planner/hydration";
+import {
+  CUSTOM_DISTANCE_ID,
+  decodePlannerState,
+  encodePlannerState,
+  type PlannerState,
+} from "../planner/urlState";
 
-const CUSTOM_DISTANCE_ID = "custom";
 const HOMEMADE_DRINK_LABEL = "Homemade Sports Drink";
 
-export default function PlannerForm() {
-  const [distanceId, setDistanceId] = useState<string>(DISTANCE_PRESETS[0].id);
-  const [customKm, setCustomKm] = useState<string>("");
-  const [paceMinutes, setPaceMinutes] = useState<string>("6");
-  const [paceSeconds, setPaceSeconds] = useState<string>("0");
+// How long to let field edits settle before pushing a new browser history
+// entry, so a burst of keystrokes collapses into one entry rather than one
+// per keystroke.
+const URL_SYNC_DEBOUNCE_MS = 400;
+
+// How long the copy-link button shows its confirmation (or error) feedback.
+const COPY_FEEDBACK_DURATION_MS = 2000;
+
+type CopyStatus = "idle" | "copied" | "error";
+
+function PlannerFormInner() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // Seed state from the URL's query params exactly once, on first render.
+  const initialStateRef = useRef<PlannerState | null>(null);
+  if (initialStateRef.current === null) {
+    initialStateRef.current = decodePlannerState(searchParams);
+  }
+  const initialState = initialStateRef.current;
+
+  const [distanceId, setDistanceId] = useState<string>(
+    initialState.distanceId,
+  );
+  const [customKm, setCustomKm] = useState<string>(initialState.customKm);
+  const [paceMinutes, setPaceMinutes] = useState<string>(
+    initialState.paceMinutes,
+  );
+  const [paceSeconds, setPaceSeconds] = useState<string>(
+    initialState.paceSeconds,
+  );
   const [selectedSolidIds, setSelectedSolidIds] = useState<
     readonly FuelSourceId[]
-  >(["gels"]);
-  const [drinkSelected, setDrinkSelected] = useState<boolean>(false);
+  >(initialState.selectedSolidIds);
+  const [drinkSelected, setDrinkSelected] = useState<boolean>(
+    initialState.drinkSelected,
+  );
 
   const toggleSolid = (id: FuelSourceId) => {
     setSelectedSolidIds((current) =>
@@ -41,12 +73,105 @@ export default function PlannerForm() {
         : [...current, id],
     );
   };
-  const [sweatRatePresetId, setSweatRatePresetId] =
-    useState<SweatRatePresetId>(DEFAULT_SWEAT_RATE_PRESET_ID);
-  const [sweatRateOverride, setSweatRateOverride] = useState<string>("");
-  const [conditionsId, setConditionsId] = useState<ConditionsId>(
-    DEFAULT_CONDITIONS_ID,
+  const [sweatRatePresetId, setSweatRatePresetId] = useState(
+    initialState.sweatRatePresetId,
   );
+  const [sweatRateOverride, setSweatRateOverride] = useState<string>(
+    initialState.sweatRateOverride,
+  );
+  const [conditionsId, setConditionsId] = useState(initialState.conditionsId);
+  const [copyStatus, setCopyStatus] = useState<CopyStatus>("idle");
+
+  const plannerState: PlannerState = useMemo(
+    () => ({
+      distanceId,
+      customKm,
+      paceMinutes,
+      paceSeconds,
+      selectedSolidIds,
+      drinkSelected,
+      sweatRatePresetId,
+      sweatRateOverride,
+      conditionsId,
+    }),
+    [
+      distanceId,
+      customKm,
+      paceMinutes,
+      paceSeconds,
+      selectedSolidIds,
+      drinkSelected,
+      sweatRatePresetId,
+      sweatRateOverride,
+      conditionsId,
+    ],
+  );
+
+  const encodedQuery = useMemo(
+    () => encodePlannerState(plannerState).toString(),
+    [plannerState],
+  );
+
+  // Tracks the query string this component last synced with (either one it
+  // pushed itself, or one it just adopted from the URL), so it can tell its
+  // own updates apart from external navigation (back/forward, a pasted link).
+  const lastSyncedSearchRef = useRef(searchParams.toString());
+  const didMountRef = useRef(false);
+
+  // Adopt state from the URL when it changes from outside this component,
+  // e.g. browser back/forward or a fresh navigation to a shared link.
+  useEffect(() => {
+    const currentSearch = searchParams.toString();
+    if (currentSearch === lastSyncedSearchRef.current) {
+      return;
+    }
+    lastSyncedSearchRef.current = currentSearch;
+
+    const next = decodePlannerState(searchParams);
+    setDistanceId(next.distanceId);
+    setCustomKm(next.customKm);
+    setPaceMinutes(next.paceMinutes);
+    setPaceSeconds(next.paceSeconds);
+    setSelectedSolidIds(next.selectedSolidIds);
+    setDrinkSelected(next.drinkSelected);
+    setSweatRatePresetId(next.sweatRatePresetId);
+    setSweatRateOverride(next.sweatRateOverride);
+    setConditionsId(next.conditionsId);
+  }, [searchParams]);
+
+  // Push local state changes to the URL (debounced) so the plan can be shared,
+  // bookmarked, and navigated with browser back/forward. Skipped on mount so
+  // loading a partial or malformed link doesn't immediately rewrite the URL.
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    if (encodedQuery === searchParams.toString()) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      lastSyncedSearchRef.current = encodedQuery;
+      router.push(`${pathname}?${encodedQuery}`, { scroll: false });
+    }, URL_SYNC_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [encodedQuery, pathname, router, searchParams]);
+
+  const handleCopyLink = async () => {
+    const query = encodePlannerState(plannerState).toString();
+    const shareUrl = `${window.location.origin}${window.location.pathname}?${query}`;
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("error");
+    }
+
+    window.setTimeout(() => setCopyStatus("idle"), COPY_FEEDBACK_DURATION_MS);
+  };
 
   const distanceKm = useMemo(() => {
     if (distanceId === CUSTOM_DISTANCE_ID) {
@@ -123,7 +248,32 @@ export default function PlannerForm() {
     <div className="grid w-full gap-6 md:grid-cols-2">
       <section className="card bg-base-100 shadow-xl">
         <div className="card-body gap-6 text-left">
-          <h2 className="card-title">Your Run</h2>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="card-title">Your Run</h2>
+            <div className="flex items-center gap-2">
+              {copyStatus !== "idle" && (
+                <span
+                  role="status"
+                  className={`text-sm ${
+                    copyStatus === "copied"
+                      ? "text-success"
+                      : "text-error"
+                  }`}
+                >
+                  {copyStatus === "copied" ? "Link copied!" : "Copy failed"}
+                </span>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm btn-outline"
+                onClick={() => {
+                  void handleCopyLink();
+                }}
+              >
+                Copy link
+              </button>
+            </div>
+          </div>
 
           <div className="form-control">
             <span className="label-text mb-2 font-medium">Distance</span>
@@ -560,5 +710,13 @@ export default function PlannerForm() {
         </div>
       </section>
     </div>
+  );
+}
+
+export default function PlannerForm() {
+  return (
+    <Suspense fallback={null}>
+      <PlannerFormInner />
+    </Suspense>
   );
 }
