@@ -19,6 +19,18 @@ import {
   SWEAT_RATE_PRESETS,
 } from "../planner/hydration";
 import {
+  DEFAULT_UNIT_SYSTEM,
+  distanceFromUnit,
+  distanceToUnit,
+  distanceUnitLabel,
+  formatDistanceValue,
+  minutesToWholeAndSeconds,
+  paceFromUnit,
+  paceToUnit,
+  paceUnitLabel,
+  type UnitSystem,
+} from "../planner/units";
+import {
   CUSTOM_DISTANCE_ID,
   decodePlannerState,
   encodePlannerState,
@@ -26,6 +38,9 @@ import {
 } from "../planner/urlState";
 
 const HOMEMADE_DRINK_LABEL = "Homemade Sports Drink";
+
+// Where the runner's metric/imperial choice is remembered across visits.
+const UNIT_STORAGE_KEY = "run-fueling-calculator:unit";
 
 // How long to let field edits settle before pushing a new browser history
 // entry, so a burst of keystrokes collapses into one entry rather than one
@@ -52,13 +67,71 @@ function PlannerFormInner() {
   const [distanceId, setDistanceId] = useState<string>(
     initialState.distanceId,
   );
-  const [customKm, setCustomKm] = useState<string>(initialState.customKm);
-  const [paceMinutes, setPaceMinutes] = useState<string>(
+
+  // Metric/imperial choice, remembered in localStorage rather than the URL.
+  // Starts metric on every render so the pre-hydration markup always matches;
+  // a mount effect below adopts the stored preference once localStorage is
+  // available.
+  const [unit, setUnit] = useState<UnitSystem>(DEFAULT_UNIT_SYSTEM);
+  const previousUnitRef = useRef<UnitSystem>(unit);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(UNIT_STORAGE_KEY);
+    if (stored === "metric" || stored === "imperial") {
+      setUnit(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(UNIT_STORAGE_KEY, unit);
+  }, [unit]);
+
+  // Custom distance and pace are edited in whichever unit is currently
+  // selected; distanceKm/paceMinutesPerKm below convert them back to metric
+  // for calculation, and canonicalCustomKm/canonicalPace convert them to
+  // metric for the (always-metric) URL state.
+  const [customDistanceText, setCustomDistanceText] = useState<string>(
+    initialState.customKm,
+  );
+  const [paceMinutesText, setPaceMinutesText] = useState<string>(
     initialState.paceMinutes,
   );
-  const [paceSeconds, setPaceSeconds] = useState<string>(
+  const [paceSecondsText, setPaceSecondsText] = useState<string>(
     initialState.paceSeconds,
   );
+
+  // When the unit toggles (by the runner's click, or the mount effect above
+  // adopting a stored preference), convert the displayed custom distance and
+  // pace so the underlying values carry over instead of being lost.
+  useEffect(() => {
+    const previousUnit = previousUnitRef.current;
+    if (previousUnit === unit) {
+      return;
+    }
+    previousUnitRef.current = unit;
+
+    const parsedDistance = Number.parseFloat(customDistanceText);
+    if (Number.isFinite(parsedDistance)) {
+      const km = distanceFromUnit(parsedDistance, previousUnit);
+      setCustomDistanceText(formatDistanceValue(distanceToUnit(km, unit)));
+    }
+
+    const parsedMinutes = Number.parseInt(paceMinutesText, 10);
+    const parsedSeconds = Number.parseInt(paceSecondsText, 10);
+    if (Number.isFinite(parsedMinutes) || Number.isFinite(parsedSeconds)) {
+      const safeMinutes = Number.isFinite(parsedMinutes) ? parsedMinutes : 0;
+      const safeSeconds = Number.isFinite(parsedSeconds) ? parsedSeconds : 0;
+      const paceInPreviousUnit = paceToMinutesPerKm(safeMinutes, safeSeconds);
+      const paceInKm = paceFromUnit(paceInPreviousUnit, previousUnit);
+      const { minutes, seconds } = minutesToWholeAndSeconds(
+        paceToUnit(paceInKm, unit),
+      );
+      setPaceMinutesText(String(minutes));
+      setPaceSecondsText(String(seconds));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unit]);
+
   const [selectedSolidIds, setSelectedSolidIds] = useState<
     readonly FuelSourceId[]
   >(initialState.selectedSolidIds);
@@ -82,12 +155,42 @@ function PlannerFormInner() {
   const [conditionsId, setConditionsId] = useState(initialState.conditionsId);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("idle");
 
+  // The URL (and shared links) always carry metric values regardless of the
+  // runner's display preference, so a link works the same for whoever opens
+  // it. These convert the current-unit input text back to km / min per km;
+  // an unparseable value (e.g. empty, mid-edit) falls back to the raw text,
+  // matching decodePlannerState's own tolerance for malformed input.
+  const canonicalCustomKm = useMemo(() => {
+    const parsed = Number.parseFloat(customDistanceText);
+    if (!Number.isFinite(parsed)) {
+      return customDistanceText;
+    }
+    return String(distanceFromUnit(parsed, unit));
+  }, [customDistanceText, unit]);
+
+  const canonicalPace = useMemo(() => {
+    const minutes = Number.parseInt(paceMinutesText, 10);
+    const seconds = Number.parseInt(paceSecondsText, 10);
+    const safeMinutes = Number.isFinite(minutes) ? minutes : 0;
+    const safeSeconds = Number.isFinite(seconds) ? seconds : 0;
+    const paceInUnit = paceToMinutesPerKm(safeMinutes, safeSeconds);
+    if (paceInUnit <= 0) {
+      return { paceMinutes: paceMinutesText, paceSeconds: paceSecondsText };
+    }
+    const { minutes: canonicalMinutes, seconds: canonicalSeconds } =
+      minutesToWholeAndSeconds(paceFromUnit(paceInUnit, unit));
+    return {
+      paceMinutes: String(canonicalMinutes),
+      paceSeconds: String(canonicalSeconds),
+    };
+  }, [paceMinutesText, paceSecondsText, unit]);
+
   const plannerState: PlannerState = useMemo(
     () => ({
       distanceId,
-      customKm,
-      paceMinutes,
-      paceSeconds,
+      customKm: canonicalCustomKm,
+      paceMinutes: canonicalPace.paceMinutes,
+      paceSeconds: canonicalPace.paceSeconds,
       selectedSolidIds,
       drinkSelected,
       sweatRatePresetId,
@@ -96,9 +199,8 @@ function PlannerFormInner() {
     }),
     [
       distanceId,
-      customKm,
-      paceMinutes,
-      paceSeconds,
+      canonicalCustomKm,
+      canonicalPace,
       selectedSolidIds,
       drinkSelected,
       sweatRatePresetId,
@@ -129,14 +231,42 @@ function PlannerFormInner() {
 
     const next = decodePlannerState(searchParams);
     setDistanceId(next.distanceId);
-    setCustomKm(next.customKm);
-    setPaceMinutes(next.paceMinutes);
-    setPaceSeconds(next.paceSeconds);
+
+    // next.customKm/paceMinutes/paceSeconds are always metric; convert them
+    // into whatever unit is currently displayed.
+    const parsedKm = Number.parseFloat(next.customKm);
+    setCustomDistanceText(
+      Number.isFinite(parsedKm)
+        ? formatDistanceValue(distanceToUnit(parsedKm, unit))
+        : next.customKm,
+    );
+
+    const parsedNextMinutes = Number.parseInt(next.paceMinutes, 10);
+    const parsedNextSeconds = Number.parseInt(next.paceSeconds, 10);
+    if (
+      Number.isFinite(parsedNextMinutes) ||
+      Number.isFinite(parsedNextSeconds)
+    ) {
+      const paceInKm = paceToMinutesPerKm(
+        Number.isFinite(parsedNextMinutes) ? parsedNextMinutes : 0,
+        Number.isFinite(parsedNextSeconds) ? parsedNextSeconds : 0,
+      );
+      const { minutes, seconds } = minutesToWholeAndSeconds(
+        paceToUnit(paceInKm, unit),
+      );
+      setPaceMinutesText(String(minutes));
+      setPaceSecondsText(String(seconds));
+    } else {
+      setPaceMinutesText(next.paceMinutes);
+      setPaceSecondsText(next.paceSeconds);
+    }
+
     setSelectedSolidIds(next.selectedSolidIds);
     setDrinkSelected(next.drinkSelected);
     setSweatRatePresetId(next.sweatRatePresetId);
     setSweatRateOverride(next.sweatRateOverride);
     setConditionsId(next.conditionsId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   // Push local state changes to the URL (debounced) so the plan can be shared,
@@ -175,22 +305,28 @@ function PlannerFormInner() {
 
   const distanceKm = useMemo(() => {
     if (distanceId === CUSTOM_DISTANCE_ID) {
-      const parsed = Number.parseFloat(customKm);
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      const parsed = Number.parseFloat(customDistanceText);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+      }
+      return distanceFromUnit(parsed, unit);
     }
 
     const preset = DISTANCE_PRESETS.find((option) => option.id === distanceId);
     return preset ? preset.km : null;
-  }, [distanceId, customKm]);
+  }, [distanceId, customDistanceText, unit]);
 
   const paceMinutesPerKm = useMemo(() => {
-    const minutes = Number.parseInt(paceMinutes, 10);
-    const seconds = Number.parseInt(paceSeconds, 10);
+    const minutes = Number.parseInt(paceMinutesText, 10);
+    const seconds = Number.parseInt(paceSecondsText, 10);
     const safeMinutes = Number.isFinite(minutes) ? minutes : 0;
     const safeSeconds = Number.isFinite(seconds) ? seconds : 0;
     const pace = paceToMinutesPerKm(safeMinutes, safeSeconds);
-    return pace > 0 ? pace : null;
-  }, [paceMinutes, paceSeconds]);
+    if (pace <= 0) {
+      return null;
+    }
+    return paceFromUnit(pace, unit);
+  }, [paceMinutesText, paceSecondsText, unit]);
 
   const durationMinutes = useMemo(() => {
     if (distanceKm === null || paceMinutesPerKm === null) {
@@ -251,6 +387,32 @@ function PlannerFormInner() {
           <div className="flex items-center justify-between gap-4">
             <h2 className="card-title">Your Run</h2>
             <div className="flex items-center gap-2">
+              <div
+                className="join"
+                role="group"
+                aria-label="Distance and pace units"
+              >
+                <button
+                  type="button"
+                  className={`btn btn-sm join-item ${
+                    unit === "metric" ? "btn-primary" : "btn-outline"
+                  }`}
+                  aria-pressed={unit === "metric"}
+                  onClick={() => setUnit("metric")}
+                >
+                  km
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm join-item ${
+                    unit === "imperial" ? "btn-primary" : "btn-outline"
+                  }`}
+                  aria-pressed={unit === "imperial"}
+                  onClick={() => setUnit("imperial")}
+                >
+                  mi
+                </button>
+              </div>
               {copyStatus !== "idle" && (
                 <span
                   role="status"
@@ -288,7 +450,9 @@ function PlannerFormInner() {
                   aria-pressed={distanceId === preset.id}
                   onClick={() => setDistanceId(preset.id)}
                 >
-                  {preset.label}
+                  {`${preset.label} (${formatDistanceValue(
+                    distanceToUnit(preset.km, unit),
+                  )} ${distanceUnitLabel(unit)})`}
                 </button>
               ))}
               <button
@@ -319,28 +483,36 @@ function PlannerFormInner() {
                   step="0.1"
                   className="input input-bordered join-item w-full"
                   placeholder="e.g. 15"
-                  value={customKm}
-                  onChange={(event) => setCustomKm(event.target.value)}
-                  aria-label="Custom distance in kilometres"
+                  value={customDistanceText}
+                  onChange={(event) =>
+                    setCustomDistanceText(event.target.value)
+                  }
+                  aria-label={`Custom distance in ${
+                    unit === "metric" ? "kilometres" : "miles"
+                  }`}
                 />
                 <span className="btn btn-disabled join-item no-animation">
-                  km
+                  {distanceUnitLabel(unit)}
                 </span>
               </div>
             </label>
           )}
 
           <div className="form-control">
-            <span className="label-text mb-2 font-medium">Pace (min/km)</span>
+            <span className="label-text mb-2 font-medium">
+              Pace ({paceUnitLabel(unit)})
+            </span>
             <div className="flex items-center gap-2">
               <input
                 type="number"
                 inputMode="numeric"
                 min="0"
                 className="input input-bordered w-20"
-                value={paceMinutes}
-                onChange={(event) => setPaceMinutes(event.target.value)}
-                aria-label="Pace minutes per kilometre"
+                value={paceMinutesText}
+                onChange={(event) => setPaceMinutesText(event.target.value)}
+                aria-label={`Pace minutes per ${
+                  unit === "metric" ? "kilometre" : "mile"
+                }`}
               />
               <span className="text-xl font-bold">:</span>
               <input
@@ -349,11 +521,15 @@ function PlannerFormInner() {
                 min="0"
                 max="59"
                 className="input input-bordered w-20"
-                value={paceSeconds}
-                onChange={(event) => setPaceSeconds(event.target.value)}
-                aria-label="Pace seconds per kilometre"
+                value={paceSecondsText}
+                onChange={(event) => setPaceSecondsText(event.target.value)}
+                aria-label={`Pace seconds per ${
+                  unit === "metric" ? "kilometre" : "mile"
+                }`}
               />
-              <span className="text-base-content/70">min/km</span>
+              <span className="text-base-content/70">
+                {paceUnitLabel(unit)}
+              </span>
             </div>
           </div>
 
