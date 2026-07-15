@@ -31,6 +31,7 @@ export interface PlannerState {
   readonly sweatRatePresetId: SweatRatePresetId;
   readonly sweatRateOverride: string;
   readonly conditionsId: ConditionsId;
+  readonly caffeineEnabled: boolean;
 }
 
 // The state PlannerForm starts from with no query params at all, matching its
@@ -45,6 +46,7 @@ export const DEFAULT_PLANNER_STATE: PlannerState = {
   sweatRatePresetId: DEFAULT_SWEAT_RATE_PRESET_ID,
   sweatRateOverride: "",
   conditionsId: DEFAULT_CONDITIONS_ID,
+  caffeineEnabled: false,
 };
 
 const PARAM_KEYS = {
@@ -57,6 +59,7 @@ const PARAM_KEYS = {
   sweat: "sweat",
   sweatOverride: "sweatOverride",
   conditions: "conditions",
+  caffeine: "caffeine",
 } as const;
 
 const VALID_DISTANCE_IDS = new Set<string>([
@@ -92,6 +95,7 @@ export function encodePlannerState(state: PlannerState): URLSearchParams {
     params.set(PARAM_KEYS.sweatOverride, state.sweatRateOverride);
   }
   params.set(PARAM_KEYS.conditions, state.conditionsId);
+  params.set(PARAM_KEYS.caffeine, state.caffeineEnabled ? "1" : "0");
 
   return params;
 }
@@ -158,6 +162,14 @@ export function decodePlannerState(params: URLSearchParams): PlannerState {
       ? conditionsIdRaw
       : DEFAULT_PLANNER_STATE.conditionsId
   ) as ConditionsId;
+
+  const caffeineRaw = params.get(PARAM_KEYS.caffeine);
+  const caffeineEnabled =
+    caffeineRaw === "1"
+      ? true
+      : caffeineRaw === "0"
+        ? false
+        : DEFAULT_PLANNER_STATE.caffeineEnabled;
 
   return {
     distanceId,

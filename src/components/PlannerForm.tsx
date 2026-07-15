@@ -14,6 +14,11 @@ import { FUEL_SOURCES } from "../planner/fuel";
 import type { FuelSourceId } from "../planner/fuel";
 import { planFueling } from "../planner/fueling";
 import {
+  CAFFEINE_SLOT_MESSAGE,
+  CAFFEINE_TOO_SHORT_MESSAGE,
+  planCaffeine,
+} from "../planner/caffeine";
+import {
   CONDITIONS,
   planHydration,
   SWEAT_RATE_PRESETS,
@@ -65,6 +70,9 @@ function PlannerFormInner() {
   const [drinkSelected, setDrinkSelected] = useState<boolean>(
     initialState.drinkSelected,
   );
+  const [caffeineEnabled, setCaffeineEnabled] = useState<boolean>(
+    initialState.caffeineEnabled,
+  );
 
   const toggleSolid = (id: FuelSourceId) => {
     setSelectedSolidIds((current) =>
@@ -93,6 +101,7 @@ function PlannerFormInner() {
       sweatRatePresetId,
       sweatRateOverride,
       conditionsId,
+      caffeineEnabled,
     }),
     [
       distanceId,
@@ -104,6 +113,7 @@ function PlannerFormInner() {
       sweatRatePresetId,
       sweatRateOverride,
       conditionsId,
+      caffeineEnabled,
     ],
   );
 
@@ -137,6 +147,7 @@ function PlannerFormInner() {
     setSweatRatePresetId(next.sweatRatePresetId);
     setSweatRateOverride(next.sweatRateOverride);
     setConditionsId(next.conditionsId);
+    setCaffeineEnabled(next.caffeineEnabled);
   }, [searchParams]);
 
   // Push local state changes to the URL (debounced) so the plan can be shared,
@@ -243,6 +254,13 @@ function PlannerFormInner() {
     drinkSelected,
     hydrationPlan,
   ]);
+
+  const caffeinePlan = useMemo(() => {
+    if (durationMinutes === null || fuelingPlan === null) {
+      return null;
+    }
+    return planCaffeine(fuelingPlan.timeline, durationMinutes);
+  }, [durationMinutes, fuelingPlan]);
 
   return (
     <div className="grid w-full gap-6 md:grid-cols-2">
@@ -390,6 +408,27 @@ function PlannerFormInner() {
             <span className="label-text-alt mt-2 text-base-content/60">
               Combine several. The Homemade Sports Drink covers the whole Fluid
               Target and its carbs count first; selected solids fill the rest.
+            </span>
+          </div>
+
+          <div className="form-control">
+            <span className="label-text mb-2 font-medium">Caffeine</span>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  caffeineEnabled ? "btn-primary" : "btn-outline"
+                }`}
+                aria-pressed={caffeineEnabled}
+                onClick={() => setCaffeineEnabled((on) => !on)}
+              >
+                Suggest caffeine
+              </button>
+            </div>
+            <span className="label-text-alt mt-2 text-base-content/60">
+              {caffeineEnabled && caffeinePlan !== null && !caffeinePlan.eligible
+                ? CAFFEINE_TOO_SHORT_MESSAGE
+                : "Advisory only: marks a few gels in the final third of the Run as caffeinated. Gel counts and totals stay the same."}
             </span>
           </div>
 
@@ -617,18 +656,34 @@ function PlannerFormInner() {
                           Timeline
                         </div>
                         <ul className="menu bg-base-200 rounded-box w-full gap-1 p-2">
-                          {fuelingPlan.timeline.map((entry) => (
-                            <li key={entry.index}>
-                              <div className="flex items-center justify-between">
-                                <span className="font-mono font-semibold">
-                                  {entry.offsetLabel}
-                                </span>
-                                <span className="text-base-content/80">
-                                  {entry.label}
-                                </span>
-                              </div>
-                            </li>
-                          ))}
+                          {fuelingPlan.timeline.map((entry) => {
+                            const caffeinated =
+                              caffeineEnabled &&
+                              caffeinePlan !== null &&
+                              caffeinePlan.eligible &&
+                              caffeinePlan.annotatedEntryIndexes.has(
+                                entry.index,
+                              );
+                            return (
+                              <li key={entry.index}>
+                                <div className="flex flex-col">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-mono font-semibold">
+                                      {entry.offsetLabel}
+                                    </span>
+                                    <span className="text-base-content/80">
+                                      {entry.label}
+                                    </span>
+                                  </div>
+                                  {caffeinated && (
+                                    <span className="text-sm text-secondary">
+                                      {CAFFEINE_SLOT_MESSAGE}
+                                    </span>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
                     )}
