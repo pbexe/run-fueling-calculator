@@ -10,6 +10,7 @@ import {
   runDurationMinutes,
 } from "../planner/plan";
 import { FUEL_SOURCES } from "../planner/fuel";
+import type { FuelSourceId } from "../planner/fuel";
 import { planFueling } from "../planner/fueling";
 import {
   CONDITIONS,
@@ -28,8 +29,18 @@ export default function PlannerForm() {
   const [customKm, setCustomKm] = useState<string>("");
   const [paceMinutes, setPaceMinutes] = useState<string>("6");
   const [paceSeconds, setPaceSeconds] = useState<string>("0");
-  const [gelsSelected, setGelsSelected] = useState<boolean>(true);
+  const [selectedSolidIds, setSelectedSolidIds] = useState<
+    readonly FuelSourceId[]
+  >(["gels"]);
   const [drinkSelected, setDrinkSelected] = useState<boolean>(false);
+
+  const toggleSolid = (id: FuelSourceId) => {
+    setSelectedSolidIds((current) =>
+      current.includes(id)
+        ? current.filter((selected) => selected !== id)
+        : [...current, id],
+    );
+  };
   const [sweatRatePresetId, setSweatRatePresetId] =
     useState<SweatRatePresetId>(DEFAULT_SWEAT_RATE_PRESET_ID);
   const [sweatRateOverride, setSweatRateOverride] = useState<string>("");
@@ -94,13 +105,19 @@ export default function PlannerForm() {
     return planFueling(
       carbTarget,
       durationMinutes,
-      { gels: gelsSelected, drink: drinkSelected },
+      { solids: selectedSolidIds, drink: drinkSelected },
       {
         totalFluidMl: hydrationPlan?.totalFluidMl ?? 0,
         timeline: hydrationPlan?.timeline ?? [],
       },
     );
-  }, [carbTarget, durationMinutes, gelsSelected, drinkSelected, hydrationPlan]);
+  }, [
+    carbTarget,
+    durationMinutes,
+    selectedSolidIds,
+    drinkSelected,
+    hydrationPlan,
+  ]);
 
   return (
     <div className="grid w-full gap-6 md:grid-cols-2">
@@ -193,19 +210,22 @@ export default function PlannerForm() {
           <div className="form-control">
             <span className="label-text mb-2 font-medium">Fuel Sources</span>
             <div className="flex flex-wrap gap-2">
-              {FUEL_SOURCES.map((source) => (
-                <button
-                  key={source.id}
-                  type="button"
-                  className={`btn btn-sm ${
-                    gelsSelected ? "btn-primary" : "btn-outline"
-                  }`}
-                  aria-pressed={gelsSelected}
-                  onClick={() => setGelsSelected((on) => !on)}
-                >
-                  {source.label}
-                </button>
-              ))}
+              {FUEL_SOURCES.map((source) => {
+                const isSelected = selectedSolidIds.includes(source.id);
+                return (
+                  <button
+                    key={source.id}
+                    type="button"
+                    className={`btn btn-sm ${
+                      isSelected ? "btn-primary" : "btn-outline"
+                    }`}
+                    aria-pressed={isSelected}
+                    onClick={() => toggleSolid(source.id)}
+                  >
+                    {source.label}
+                  </button>
+                );
+              })}
               <button
                 type="button"
                 className={`btn btn-sm ${
@@ -219,7 +239,7 @@ export default function PlannerForm() {
             </div>
             <span className="label-text-alt mt-2 text-base-content/60">
               Combine several. The Homemade Sports Drink covers the whole Fluid
-              Target and its carbs count first; gels fill the rest.
+              Target and its carbs count first; selected solids fill the rest.
             </span>
           </div>
 
@@ -343,28 +363,48 @@ export default function PlannerForm() {
 
               {fuelingPlan !== null &&
                 (carbTarget.fuelNeeded || fuelingPlan.drinkSelected) &&
-                (fuelingPlan.gelCount > 0 || fuelingPlan.drinkSelected) && (
+                (fuelingPlan.solidAllocations.some(
+                  (allocation) => allocation.count > 0,
+                ) ||
+                  fuelingPlan.drinkSelected) && (
                   <div className="flex flex-col gap-4">
                     <div className="rounded-box bg-base-200 p-4">
                       <div className="text-sm font-semibold uppercase tracking-wide text-base-content/70">
                         Shopping summary
                       </div>
 
-                      {fuelingPlan.gelCount > 0 && (
-                        <>
-                          <div className="mt-1 text-2xl font-bold text-primary">
-                            {fuelingPlan.gelCount}{" "}
-                            {fuelingPlan.gelCount === 1 ? "gel" : "gels"}
+                      {fuelingPlan.solidAllocations
+                        .filter((allocation) => allocation.count > 0)
+                        .map((allocation) => (
+                          <div key={allocation.source.id} className="mt-3 first:mt-1">
+                            <div className="text-2xl font-bold text-primary">
+                              {allocation.count}{" "}
+                              {allocation.count === 1
+                                ? allocation.source.servingNoun
+                                : allocation.source.servingNounPlural}
+                            </div>
+                            <div className="text-sm text-base-content/70">
+                              About {allocation.source.carbsPerServingGrams} g
+                              carbs each, {allocation.totalCarbsGrams} g from{" "}
+                              {allocation.source.servingNounPlural}.
+                              {allocation.source.piecesPerServing !==
+                              undefined
+                                ? ` Each ${allocation.source.servingNoun} is ${allocation.source.piecesPerServing} ${allocation.source.pieceNoun}s.`
+                                : ""}
+                            </div>
                           </div>
-                          <div className="text-sm text-base-content/70">
-                            About {fuelingPlan.carbsPerGelGrams} g carbs each,{" "}
-                            {fuelingPlan.gelCarbsGrams} g from gels.
-                          </div>
-                        </>
-                      )}
+                        ))}
 
                       {fuelingPlan.recipe !== null && (
-                        <div className={fuelingPlan.gelCount > 0 ? "mt-3" : ""}>
+                        <div
+                          className={
+                            fuelingPlan.solidAllocations.some(
+                              (allocation) => allocation.count > 0,
+                            )
+                              ? "mt-3"
+                              : ""
+                          }
+                        >
                           <div className="text-lg font-bold text-primary">
                             {HOMEMADE_DRINK_LABEL}
                           </div>
@@ -401,11 +441,25 @@ export default function PlannerForm() {
                           {Math.round(fuelingPlan.carbTargetTotalGrams)} g Carb
                           Target.
                           {fuelingPlan.drinkMeetsCarbTarget
-                            ? " The drink alone meets the Carb Target, so no gels are needed."
+                            ? " The drink alone meets the Carb Target, so no solids are needed."
                             : ""}
                         </div>
                       )}
                     </div>
+
+                    {fuelingPlan.warnings.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        {fuelingPlan.warnings.map((warning, index) => (
+                          <div
+                            key={index}
+                            role="alert"
+                            className="alert alert-warning text-sm"
+                          >
+                            <span>{warning.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {fuelingPlan.timeline.length > 0 && (
                       <div>
