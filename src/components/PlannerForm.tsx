@@ -11,6 +11,14 @@ import {
 } from "../planner/plan";
 import { FUEL_SOURCES, GELS, planGels } from "../planner/fuel";
 import type { FuelSourceId } from "../planner/fuel";
+import {
+  CONDITIONS,
+  DEFAULT_CONDITIONS_ID,
+  DEFAULT_SWEAT_RATE_PRESET_ID,
+  planHydration,
+  SWEAT_RATE_PRESETS,
+} from "../planner/hydration";
+import type { ConditionsId, SweatRatePresetId } from "../planner/hydration";
 
 const CUSTOM_DISTANCE_ID = "custom";
 
@@ -20,6 +28,12 @@ export default function PlannerForm() {
   const [paceMinutes, setPaceMinutes] = useState<string>("6");
   const [paceSeconds, setPaceSeconds] = useState<string>("0");
   const [fuelSourceId, setFuelSourceId] = useState<FuelSourceId>(GELS.id);
+  const [sweatRatePresetId, setSweatRatePresetId] =
+    useState<SweatRatePresetId>(DEFAULT_SWEAT_RATE_PRESET_ID);
+  const [sweatRateOverride, setSweatRateOverride] = useState<string>("");
+  const [conditionsId, setConditionsId] = useState<ConditionsId>(
+    DEFAULT_CONDITIONS_ID,
+  );
 
   const distanceKm = useMemo(() => {
     if (distanceId === CUSTOM_DISTANCE_ID) {
@@ -64,6 +78,22 @@ export default function PlannerForm() {
     }
     return planGels(carbTarget, durationMinutes);
   }, [carbTarget, durationMinutes, fuelSourceId]);
+
+  const overrideMlPerHour = useMemo(() => {
+    const parsed = Number.parseFloat(sweatRateOverride);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [sweatRateOverride]);
+
+  const hydrationPlan = useMemo(() => {
+    if (durationMinutes === null) {
+      return null;
+    }
+    return planHydration(
+      { presetId: sweatRatePresetId, overrideMlPerHour },
+      conditionsId,
+      durationMinutes,
+    );
+  }, [durationMinutes, sweatRatePresetId, overrideMlPerHour, conditionsId]);
 
   return (
     <div className="grid w-full gap-6 md:grid-cols-2">
@@ -174,6 +204,81 @@ export default function PlannerForm() {
               More Fuel Sources coming soon.
             </span>
           </div>
+
+          <div className="form-control">
+            <span className="label-text mb-2 font-medium">Sweat Rate</span>
+            <div className="flex flex-wrap gap-2">
+              {SWEAT_RATE_PRESETS.map((sweatPreset) => (
+                <button
+                  key={sweatPreset.id}
+                  type="button"
+                  className={`btn btn-sm ${
+                    sweatRatePresetId === sweatPreset.id
+                      ? "btn-primary"
+                      : "btn-outline"
+                  } ${overrideMlPerHour !== null ? "btn-disabled" : ""}`}
+                  aria-pressed={sweatRatePresetId === sweatPreset.id}
+                  disabled={overrideMlPerHour !== null}
+                  onClick={() => setSweatRatePresetId(sweatPreset.id)}
+                >
+                  {sweatPreset.label}
+                </button>
+              ))}
+            </div>
+            <label className="form-control mt-3">
+              <span className="label-text mb-2 text-base-content/70">
+                Measured Sweat Rate (optional)
+              </span>
+              <div className="join">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  step="10"
+                  className="input input-bordered join-item w-full"
+                  placeholder="e.g. 800"
+                  value={sweatRateOverride}
+                  onChange={(event) =>
+                    setSweatRateOverride(event.target.value)
+                  }
+                  aria-label="Measured Sweat Rate in millilitres per hour"
+                />
+                <span className="btn btn-disabled join-item no-animation">
+                  ml/h
+                </span>
+              </div>
+              <span className="label-text-alt mt-2 text-base-content/60">
+                From a sweat test. Overrides the preset and ignores Conditions.
+              </span>
+            </label>
+          </div>
+
+          <div className="form-control">
+            <span className="label-text mb-2 font-medium">Conditions</span>
+            <div className="flex flex-wrap gap-2">
+              {CONDITIONS.map((condition) => (
+                <button
+                  key={condition.id}
+                  type="button"
+                  className={`btn btn-sm ${
+                    conditionsId === condition.id
+                      ? "btn-primary"
+                      : "btn-outline"
+                  } ${overrideMlPerHour !== null ? "btn-disabled" : ""}`}
+                  aria-pressed={conditionsId === condition.id}
+                  disabled={overrideMlPerHour !== null}
+                  onClick={() => setConditionsId(condition.id)}
+                >
+                  {condition.label}
+                </button>
+              ))}
+            </div>
+            <span className="label-text-alt mt-2 text-base-content/60">
+              {overrideMlPerHour !== null
+                ? "Ignored while a measured Sweat Rate is set."
+                : "Nudges the Fluid Target up in the heat, down in the cool."}
+            </span>
+          </div>
         </div>
       </section>
 
@@ -251,6 +356,60 @@ export default function PlannerForm() {
                       ))}
                     </ul>
                   </div>
+                </div>
+              )}
+
+              {hydrationPlan !== null && (
+                <div className="stat px-0">
+                  <div className="stat-title">Fluid Target</div>
+                  <div className="stat-value text-primary">
+                    {hydrationPlan.fluidTargetMlPerHour} ml/h
+                  </div>
+                  <div className="stat-desc">
+                    water to drink per hour on the Run
+                    {hydrationPlan.usedOverride
+                      ? "; from your measured Sweat Rate, so Conditions are ignored"
+                      : ""}
+                  </div>
+                </div>
+              )}
+
+              {hydrationPlan !== null && (
+                <div className="flex flex-col gap-4">
+                  <div className="rounded-box bg-base-200 p-4">
+                    <div className="text-sm font-semibold uppercase tracking-wide text-base-content/70">
+                      Fluid summary
+                    </div>
+                    <div className="mt-1 text-2xl font-bold text-primary">
+                      {hydrationPlan.totalFluidMl} ml water
+                    </div>
+                    <div className="text-sm text-base-content/70">
+                      Total to carry across the Run at{" "}
+                      {hydrationPlan.fluidTargetMlPerHour} ml/h.
+                    </div>
+                  </div>
+
+                  {hydrationPlan.timeline.length > 0 && (
+                    <div>
+                      <div className="mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70">
+                        Drink reminders
+                      </div>
+                      <ul className="menu bg-base-200 rounded-box w-full gap-1 p-2">
+                        {hydrationPlan.timeline.map((reminder) => (
+                          <li key={reminder.index}>
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono font-semibold">
+                                {reminder.offsetLabel}
+                              </span>
+                              <span className="text-base-content/80">
+                                Drink ~{reminder.volumeMl} ml water
+                              </span>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
             </>
