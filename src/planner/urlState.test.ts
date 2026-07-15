@@ -24,6 +24,7 @@ describe("encodePlannerState / decodePlannerState round-trip", () => {
       sweatRatePresetId: "heavy",
       sweatRateOverride: "820",
       conditionsId: "hot",
+      caffeineEnabled: true,
     };
 
     const params = encodePlannerState(state);
@@ -86,6 +87,18 @@ describe("decodePlannerState with missing or malformed params", () => {
     expect(decodePlannerState(params).drinkSelected).toBe(
       DEFAULT_PLANNER_STATE.drinkSelected,
     );
+  });
+
+  it("falls back for a malformed caffeine flag", () => {
+    const params = new URLSearchParams({ caffeine: "yes" });
+    expect(decodePlannerState(params).caffeineEnabled).toBe(
+      DEFAULT_PLANNER_STATE.caffeineEnabled,
+    );
+  });
+
+  it("reads an explicit caffeine flag", () => {
+    const params = new URLSearchParams({ caffeine: "1" });
+    expect(decodePlannerState(params).caffeineEnabled).toBe(true);
   });
 
   it("falls back for an unknown sweat rate preset and conditions id", () => {
